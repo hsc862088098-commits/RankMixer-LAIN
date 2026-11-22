@@ -340,7 +340,10 @@ class BaseModel(nn.Module):
             raise ValueError(f"Unexpected inputs length: {len(inputs)}. Expected 3 or 4.")
 
         X_dict = dict()
+        from unirank.history import HISTORY_METADATA_KEYS
         for feature, value in batch_dict.items():
+            if feature in HISTORY_METADATA_KEYS:
+                continue
             if feature in self.feature_map.labels:
                 continue
             feature_spec = self.feature_map.features[feature]
@@ -427,6 +430,7 @@ class BaseModel(nn.Module):
         self._steps_per_epoch = len(data_generator)
         self._stop_training = False
         self._total_steps = 0
+        self.samples_seen = 0
         self._batch_index = 0
         self._epoch_index = 0
 
@@ -549,7 +553,9 @@ class BaseModel(nn.Module):
             logging.info('Evaluation @epoch {} - batch {}: '.format(
                 self._epoch_index + 1, self._batch_index + 1))
 
-        val_logs = self.evaluate(self.valid_gen, metrics=self._monitor.get_metrics())
+        validation_metrics = list(dict.fromkeys(self.validation_metrics + self._monitor.get_metrics()))
+        val_logs = self.evaluate(self.valid_gen, metrics=validation_metrics)
+        self.last_validation_metrics = val_logs
 
         if self._is_main_process():
             self.checkpoint_and_earlystop(val_logs)
@@ -557,6 +563,7 @@ class BaseModel(nn.Module):
         self.train()  # All ranks need to restore train mode
 
     def train_step(self, batch_data):
+        self.samples_seen += len(batch_data[0][self.feature_map.labels[0]])
         is_update_step = ((self._batch_index + 1) % self.accumulation_steps == 0)
         use_no_sync = (
                 self._is_distributed()

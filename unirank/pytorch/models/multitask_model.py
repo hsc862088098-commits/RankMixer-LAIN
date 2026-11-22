@@ -26,6 +26,7 @@ from unirank.pytorch.models import BaseModel
 from unirank.pytorch.torch_utils import get_device, get_loss
 from tqdm import tqdm
 from collections import defaultdict, OrderedDict
+from unirank.experiment import base_metric_names
 
 
 class MultiTaskModel(BaseModel):
@@ -95,6 +96,8 @@ class MultiTaskModel(BaseModel):
         return self.add_loss(return_dict, y_true)
 
     def evaluate(self, data_generator, metrics=None):
+        metrics = base_metric_names(
+            self.validation_metrics if metrics is None else metrics, self.feature_map.labels)
         self.eval()  # set to evaluation mode
         with torch.no_grad():
             raw_generator = data_generator
@@ -128,6 +131,18 @@ class MultiTaskModel(BaseModel):
             all_val_logs = {}
             mean_val_logs = defaultdict(list)
             group_id = np.array(group_id) if len(group_id) > 0 else None
+            actual_samples = len(y_true_all[labels[0]])
+            if getattr(raw_generator, "verify_eval_sample_count", False):
+                expected_samples = int(raw_generator.num_samples)
+                counts = torch.tensor([actual_samples, expected_samples],
+                                      dtype=torch.int64, device=self.device)
+                if self._is_distributed():
+                    dist.all_reduce(counts, op=dist.ReduceOp.SUM)
+                actual_samples, expected_samples = counts.tolist()
+                if actual_samples != expected_samples:
+                    raise ValueError(f"Evaluation sample count mismatch: "
+                                     f"actual={actual_samples}, expected={expected_samples}")
+            self.last_evaluation_sample_count = actual_samples
 
             # ---- Distributed consistency check: All ranks must agree on "whether to perform distributed evaluation aggregation" ----
             _distributed_eval = False

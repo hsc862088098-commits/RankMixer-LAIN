@@ -26,6 +26,8 @@ import torch
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from unirank.pytorch.torch_utils import build_batch_dict_from_tensor
+from unirank.history import (exposure_history_batch, paired_part_ids,
+                             validate_history_policy, validate_user_sequence)
 from unirank.utils import (
     build_part_file_map,
     dataframe_to_darray,
@@ -82,18 +84,10 @@ class BlockedParquetBatchDataset(IterableDataset):
         self.user_part_map = build_part_file_map(user_info_path)
         self.item_part_map = build_part_file_map(item_info_path)
 
-        common_part_ids = sorted(
-            set(self.data_part_map.keys())
-            & set(self.user_part_map.keys())
-            & set(self.item_part_map.keys())
-        )
-        if len(common_part_ids) == 0:
-            raise ValueError(
-                "No matched blocked parquet part ids across data/user_info/item_info.\n"
-                f"data parts={sorted(self.data_part_map.keys())}\n"
-                f"user parts={sorted(self.user_part_map.keys())}\n"
-                f"item parts={sorted(self.item_part_map.keys())}"
-            )
+        common_part_ids = paired_part_ids(
+            self.data_part_map, self.user_part_map, self.item_part_map)
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be positive")
 
         self.blocks = []
         for pid in common_part_ids:
@@ -259,6 +253,9 @@ class UniRankDataloader(DataLoader):
 
         self.feature_map = feature_map
         self.split = split
+        self.verify_eval_sample_count = kwargs.get("verify_eval_sample_count", False)
+        if split in {"valid", "test"}:
+            drop_last = kwargs.get("eval_drop_last", drop_last)
 
         self.block_cache_size = kwargs.pop("block_cache_size", 2)
 
@@ -303,7 +300,8 @@ class UniRankDataloader(DataLoader):
             user_info=user_info,
             item_info=item_info,
             padding=padding,
-            cache_size=self.block_cache_size
+            cache_size=self.block_cache_size,
+            history_feedback_policy=kwargs.get("history_feedback_policy", "original"),
         )
 
         # In blocked mode, the dataset has been split according to rank, and sampler is not used.
@@ -353,11 +351,12 @@ class BlockedBatchCollator(object):
     Only the user_info/item_info of the current block is cached each time to avoid reading the entire side-info at once.
     """
     def __init__(self, feature_map, max_len, column_index, user_info, item_info,
-                 padding="pre", cache_size=2):
+                 padding="pre", cache_size=2, history_feedback_policy="original"):
         self.feature_map = feature_map
         self.max_len = max_len
         self.padding = padding
         self.cache_size = int(max(1, cache_size))
+        self.history_feedback_policy = validate_history_policy(history_feedback_policy)
 
         self.all_cols = set(list(feature_map.features.keys()) + feature_map.labels)
         self.batch_cols = [(col, idx) for col, idx in column_index.items() if col in self.all_cols]
@@ -378,6 +377,9 @@ class BlockedBatchCollator(object):
             )
 
         self.action_task_table = self._build_action_task_table(action_vocab)
+        self.exposure_id = int(action_vocab.get("exposure", 0))
+        if self.history_feedback_policy == "exposure_only" and self.exposure_id <= 0:
+            raise ValueError("exposure_only requires a positive exposure ID in action_vocab")
         self.side_cache = OrderedDict()
 
     def _build_action_task_table(self, action_vocab):
@@ -414,8 +416,12 @@ class BlockedBatchCollator(object):
             self.side_cache[cache_key] = value
             return value
 
-        need_user_cols = ["user_index", "full_item_seq", "full_action_seq"]
+        need_user_cols = ["user_index", "full_item_seq"]
+        need_user_cols += (["full_timestamp_seq"] if self.history_feedback_policy == "exposure_only"
+                           else ["full_action_seq"])
         user_df = pd.read_parquet(user_info_file, columns=need_user_cols)
+        if user_df["user_index"].duplicated().any():
+            raise ValueError(f"Duplicate user_index in {user_info_file}")
         user_df = user_df.set_index("user_index").sort_index()
 
         if len(user_df) == 0:
@@ -435,7 +441,16 @@ class BlockedBatchCollator(object):
         )
 
         user_item_seqs = user_df["full_item_seq"].to_numpy()
-        user_action_seqs = user_df["full_action_seq"].to_numpy()
+        user_action_seqs = (user_df["full_action_seq"].to_numpy()
+                            if "full_action_seq" in user_df else None)
+        user_timestamp_seqs = (user_df["full_timestamp_seq"].to_numpy()
+                               if "full_timestamp_seq" in user_df else None)
+        if user_timestamp_seqs is not None:
+            for items, times in zip(user_item_seqs, user_timestamp_seqs):
+                validate_user_sequence(items, times)
+        elif any(len(items) != len(actions) for items, actions in
+                 zip(user_item_seqs, user_action_seqs)):
+            raise ValueError(f"Item/action sequence length mismatch in {user_info_file}")
 
         item_schema = get_parquet_schema_names(item_info_file)
         item_cols = ["item_index"] + [col for col in self.all_cols if col not in {"action", "item_index"}]
@@ -445,6 +460,8 @@ class BlockedBatchCollator(object):
             raise ValueError(f"item_index column missing in blocked item_info: {item_info_file}")
 
         item_df = pd.read_parquet(item_info_file, columns=item_cols).set_index("item_index").sort_index()
+        if item_df.index.duplicated().any():
+            raise ValueError(f"Duplicate item_index in {item_info_file}")
 
         if 0 not in item_df.index:
             item_df.loc[0] = 0
@@ -475,6 +492,7 @@ class BlockedBatchCollator(object):
             "user_row_lookup": user_row_lookup,
             "user_item_seqs": user_item_seqs,
             "user_action_seqs": user_action_seqs,
+            "user_timestamp_seqs": user_timestamp_seqs,
             "item_index_min": item_index_min,
             "item_index_max": item_index_max,
             "item_row_lookup": item_row_lookup,
@@ -522,13 +540,30 @@ class BlockedBatchCollator(object):
             raise IndexError(f"user_index={bad_uid} does not exist in blocked user_info. file={user_info_file}")
 
         user_row_ids = user_row_ids.numpy().astype(np.int64, copy=False)
-        seq_lens = batch_dict["seq_len"].int().cpu().numpy()
+        seq_lens = batch_dict["seq_len"].cpu().numpy()
+        if np.any(seq_lens != seq_lens.astype(np.int64)):
+            raise ValueError("seq_len must contain integers")
+        seq_lens = seq_lens.astype(np.int64)
 
         user_item_seqs = side["user_item_seqs"][user_row_ids]
-        user_action_seqs = side["user_action_seqs"][user_row_ids]
-
-        batch_item_seqs = self._fast_pad(user_item_seqs, seq_lens)
-        batch_action_seqs = self._fast_pad(user_action_seqs, seq_lens)
+        if self.history_feedback_policy == "exposure_only":
+            batch_item_seqs, batch_action_seqs, lengths = exposure_history_batch(
+                user_item_seqs, side["user_timestamp_seqs"][user_row_ids], seq_lens,
+                batch_dict["item_index"].cpu().numpy(), self.max_len,
+                self.exposure_id, self.padding)
+        else:
+            if any(not 0 <= length < len(items) for items, length in zip(user_item_seqs, seq_lens)):
+                raise ValueError("seq_len does not index a target exposure")
+            user_action_seqs = side["user_action_seqs"][user_row_ids]
+            batch_item_seqs = self._fast_pad(user_item_seqs, seq_lens)
+            batch_action_seqs = self._fast_pad(user_action_seqs, seq_lens)
+            lengths = {
+                "history_length_before_filter": seq_lens,
+                "history_length_prefix": seq_lens,
+                "history_length_input": (batch_item_seqs > 0).sum(axis=1),
+                "history_ties_removed": np.zeros_like(seq_lens),
+            }
+        batch_dict.update({key: torch.from_numpy(value) for key, value in lengths.items()})
 
         mask = torch.from_numpy((batch_item_seqs > 0).astype(np.float32))
 

@@ -249,7 +249,7 @@ def set_logger(params):
         
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s P%(process)d %(levelname)s %(message)s',
-                        handlers=[logging.FileHandler(log_file, mode='w'),
+                        handlers=[logging.FileHandler(log_file, mode='x' if params.get('run_id') else 'w'),
                                   logging.StreamHandler()])
 
 def print_to_json(data, sort_keys=True):
@@ -271,7 +271,9 @@ class Monitor(object):
     def get_value(self, logs):
         value = 0
         for k, v in self.kv_pairs.items():
-            value += logs.get(k, 0) * v
+            if k not in logs:
+                raise KeyError(f"Monitor key {k!r} is missing; available metrics: {sorted(logs)}")
+            value += logs[k] * v
         return value
 
     def get_metrics(self):

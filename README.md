@@ -4,6 +4,8 @@
 
 # UniRank: Benchmarking Ranking Models for Unified Sequential Modeling and Feature Interaction <sub>[v0.7.2](https://github.com/salmon1802/UniRank/tree/v0.7.2)</sub>
 
+本项目的 LAIN＋RankMixer 实施计划见 [docs/PLAN.md](docs/PLAN.md)，阶段一操作入口见 [docs/stage1.md](docs/stage1.md)。当前实现仅覆盖基线准备；研究配置采用不携带未来反馈标签的曝光历史，原始模型与原始配置保留。
+
 UniRank is an open PyTorch benchmark for unified sequential modeling and feature interaction in large-scale recommendation ranking. It standardizes chronological point-wise autoregressive supervision, multi-feedback evaluation, model implementations, data processing, and distributed training in one reproducible pipeline.
 
 The benchmark contains fifteen unified ranking architectures and five industrial datasets from short-video, advertising, and e-commerce scenarios. Their sequence lengths span roughly `10^2` to `10^5`. The toolkit supports blocked Parquet loading, DDP, operator compilation, mixed precision, optimized attention, and activation checkpointing so that accuracy and efficiency can be compared under the same protocol.
