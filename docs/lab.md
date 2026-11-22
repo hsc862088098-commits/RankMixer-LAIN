@@ -57,4 +57,6 @@ OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 \
 
 本轮授权包括依赖安装、数据下载、审计和一次完整 Smoke 流程，不包含正式全量基线训练或 LAIN。Smoke 指标只验证流程，不作为正式效果结果。
 
+2026-11-22 的完整实际结果见 [lab-smoke-20261122.md](lab-smoke-20261122.md)：27 项测试全部通过，完整数据与子集审计通过，RTX 4090 Smoke 已完成且 checkpoint 重载验证通过。
+
 NAS 的 UID 映射需要 Git 精确目录信任；该用户已配置 `safe.directory=/mnt/nas/volume2/hsc/UniRank`。不添加通配符信任。

@@ -385,7 +385,7 @@ Features are organized into user, context, sequence, and action groups. Low-freq
 ## Installation
 
 ```bash
-conda create -n UniRank python=3.10
+conda create -n UniRank python=3.11
 conda activate UniRank
 
 pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
