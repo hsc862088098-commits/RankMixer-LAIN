@@ -2,6 +2,8 @@
 
 当前代码只实现阶段一；LAIN 及正式实验尚未启动。原始 `model_zoo/RankMixer.py`、`config/model_config.yaml` 和 `config/dataset_config.yaml` 保留。以下命令供获授权后在 **AutoDL Linux** 上执行，本地 Codex 未连接该服务器。
 
+实际安装已确认 HeavyBall 3.2.0 的 NumPy 依赖要求 Python>=3.11；实验室运行入口见 [lab.md](lab.md)。下方环境版本同步修正为 Python 3.11。
+
 ## 1. 环境与代码
 
 代码放在 `/root/autodl-tmp/RankMixer-LAIN`，独立配置在 `config/project`。先检查机器资源：
@@ -15,7 +17,7 @@ df -h /root/autodl-tmp
 安装依赖需单独授权；确认驱动兼容后，参考仓库环境安装：
 
 ```bash
-conda create -n rankmixer python=3.10
+conda create -n rankmixer python=3.11
 conda activate rankmixer
 python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
 python -m pip install -r requirements.txt
