@@ -2,6 +2,7 @@ from collections import OrderedDict, defaultdict
 from contextlib import nullcontext
 import json
 import logging
+import os
 import random
 from types import SimpleNamespace
 import unittest
@@ -158,7 +159,7 @@ class EvaluationTests(unittest.TestCase):
 
 class TensorTests(unittest.TestCase):
     def test_base_model_excludes_history_metadata_and_reloads_weights(self):
-        namespace = dict(nn=nn, torch=torch)
+        namespace = dict(nn=nn, torch=torch, os=os)
         base = load_symbols('unirank/pytorch/models/rank_model.py', ['BaseModel'], namespace)['BaseModel']
         class Tiny(base):
             def __init__(self):
@@ -174,7 +175,7 @@ class TensorTests(unittest.TestCase):
         from pathlib import Path
         import tempfile
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / 'weights.model'
+            path = Path(temporary) / 'missing' / 'nested' / 'weights.model'
             before = model.linear.weight.detach().clone()
             model.save_weights(path)
             with torch.no_grad():

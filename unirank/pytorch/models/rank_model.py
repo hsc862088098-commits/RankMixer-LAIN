@@ -850,6 +850,7 @@ class BaseModel(nn.Module):
         return evaluate_metrics(y_true, y_pred, metrics, group_id)
 
     def save_weights(self, checkpoint):
+        os.makedirs(os.path.dirname(os.path.abspath(checkpoint)), exist_ok=True)
         torch.save(self.state_dict(), checkpoint)
 
     def load_weights(self, checkpoint):
